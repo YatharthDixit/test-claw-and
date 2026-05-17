@@ -5,7 +5,7 @@ set -euo pipefail
 # Repo: YatharthDixit/test-claw-and
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/YatharthDixit/test-claw-and/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/YatharthDixit/test-claw-and/main/install.sh | sed 's/\r$//' | bash
 
 REPO_OWNER="YatharthDixit"
 REPO_NAME="test-claw-and"
@@ -13,6 +13,9 @@ BRANCH="main"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}"
 INSTALL_DIR="${HOME}/.openclaw-android"
+
+MAIN_SCRIPT_REMOTE="openclaw-android-post-setup-fixed.sh"
+MAIN_SCRIPT_LOCAL="openclaw-android-post-setup-fixed.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -29,7 +32,6 @@ need_cmd() {
     local cmd="$1"
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo -e "  ${RED}✗${NC} Missing command: $cmd"
-        echo "  Install/enable it first, then run this installer again."
         exit 1
     fi
 }
@@ -40,7 +42,7 @@ need_cmd bash
 mkdir -p "$INSTALL_DIR/patches"
 cd "$INSTALL_DIR"
 
-download_file_required() {
+download_required() {
     local url="$1"
     local output="$2"
 
@@ -72,7 +74,7 @@ download_file_required() {
     exit 1
 }
 
-download_file_optional() {
+download_optional() {
     local url="$1"
     local output="$2"
 
@@ -101,16 +103,15 @@ download_file_optional() {
     return 0
 }
 
-# Main setup script
-download_file_required "$RAW_BASE/post-setup.sh" "post-setup.sh"
-chmod +x post-setup.sh
+# Download your actual fixed setup script
+download_required "$RAW_BASE/$MAIN_SCRIPT_REMOTE" "$MAIN_SCRIPT_LOCAL"
+chmod +x "$MAIN_SCRIPT_LOCAL"
 
-# Optional helper CLI used by post-setup.sh
-download_file_optional "$RAW_BASE/oa.sh" "oa.sh"
+# Optional helper files, only if present in repo
+download_optional "$RAW_BASE/oa.sh" "oa.sh"
 chmod +x oa.sh 2>/dev/null || true
 
-# Optional compatibility patch used by post-setup.sh
-download_file_optional "$RAW_BASE/patches/glibc-compat.js" "patches/glibc-compat.js"
+download_optional "$RAW_BASE/patches/glibc-compat.js" "patches/glibc-compat.js"
 
 echo ""
 echo -e "${GREEN}✓ Installer files ready${NC}"
@@ -118,4 +119,4 @@ echo ""
 echo "Starting OpenClaw Android post-setup..."
 echo ""
 
-bash "$INSTALL_DIR/post-setup.sh"
+bash "$INSTALL_DIR/$MAIN_SCRIPT_LOCAL"
