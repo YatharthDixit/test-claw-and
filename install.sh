@@ -3,13 +3,16 @@ set -euo pipefail
 
 # OpenClaw Android installer
 # Repo: YatharthDixit/test-claw-and
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/YatharthDixit/test-claw-and/main/install.sh | bash
 
 REPO_OWNER="YatharthDixit"
 REPO_NAME="test-claw-and"
 BRANCH="main"
 
 RAW_BASE="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}"
-INSTALL_DIR="$HOME/.openclaw-android"
+INSTALL_DIR="${HOME}/.openclaw-android"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -22,16 +25,29 @@ echo "  OpenClaw Android Installer"
 echo "══════════════════════════════════════════════"
 echo ""
 
+need_cmd() {
+    local cmd="$1"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo -e "  ${RED}✗${NC} Missing command: $cmd"
+        echo "  Install/enable it first, then run this installer again."
+        exit 1
+    fi
+}
+
+need_cmd curl
+need_cmd bash
+
 mkdir -p "$INSTALL_DIR/patches"
 cd "$INSTALL_DIR"
 
-download_file() {
+download_file_required() {
     local url="$1"
     local output="$2"
 
     echo -e "  ${YELLOW}Downloading:${NC} $output"
 
     if curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$output"; then
+        sed -i 's/\r$//' "$output" 2>/dev/null || true
         return 0
     fi
 
@@ -46,27 +62,58 @@ download_file() {
     for mirror in "${mirrors[@]}"; do
         echo "    trying mirror..."
         if curl -fsSL --connect-timeout 15 --max-time 180 "$mirror" -o "$output"; then
+            sed -i 's/\r$//' "$output" 2>/dev/null || true
             echo -e "  ${GREEN}✓${NC} Downloaded via mirror"
             return 0
         fi
     done
 
-    echo -e "  ${RED}✗${NC} Failed to download $output"
+    echo -e "  ${RED}✗${NC} Failed to download required file: $output"
     exit 1
 }
 
-# Download main setup script
-download_file "$RAW_BASE/post-setup.sh" "post-setup.sh"
+download_file_optional() {
+    local url="$1"
+    local output="$2"
+
+    echo -e "  ${YELLOW}Downloading optional:${NC} $output"
+
+    if curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$output"; then
+        sed -i 's/\r$//' "$output" 2>/dev/null || true
+        return 0
+    fi
+
+    local mirrors=(
+        "https://ghfast.top/$url"
+        "https://ghproxy.net/$url"
+        "https://mirror.ghproxy.com/$url"
+    )
+
+    for mirror in "${mirrors[@]}"; do
+        if curl -fsSL --connect-timeout 15 --max-time 180 "$mirror" -o "$output"; then
+            sed -i 's/\r$//' "$output" 2>/dev/null || true
+            echo -e "  ${GREEN}✓${NC} Optional file downloaded via mirror"
+            return 0
+        fi
+    done
+
+    echo -e "  ${YELLOW}[WARN]${NC} Optional file missing: $output"
+    return 0
+}
+
+# Main setup script
+download_file_required "$RAW_BASE/post-setup.sh" "post-setup.sh"
 chmod +x post-setup.sh
 
-# Optional files used by post-setup.sh
-download_file "$RAW_BASE/oa.sh" "oa.sh" || true
+# Optional helper CLI used by post-setup.sh
+download_file_optional "$RAW_BASE/oa.sh" "oa.sh"
 chmod +x oa.sh 2>/dev/null || true
 
-download_file "$RAW_BASE/patches/glibc-compat.js" "patches/glibc-compat.js" || true
+# Optional compatibility patch used by post-setup.sh
+download_file_optional "$RAW_BASE/patches/glibc-compat.js" "patches/glibc-compat.js"
 
 echo ""
-echo -e "${GREEN}✓ Files downloaded${NC}"
+echo -e "${GREEN}✓ Installer files ready${NC}"
 echo ""
 echo "Starting OpenClaw Android post-setup..."
 echo ""
