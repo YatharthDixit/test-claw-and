@@ -146,8 +146,34 @@ install_deb() {
     rm -rf "$EXTRACT_DIR"
 }
 
+# ─── Helper: discover_pacman_pkg_filename ───────────────
+# Finds the newest matching .pkg.tar.xz filename from mirror directory indexes.
+# This avoids stale hardcoded versions such as glibc-2.42 when the repo moved on.
+discover_pacman_pkg_filename() {
+    local pattern="$1"   # e.g. 'glibc-[0-9][^"<> ]*-aarch64.pkg.tar.xz'
+    local fallback="$2"
+    local repo html found
+
+    for repo in "${PACMAN_PKG_REPOS[@]}"; do
+        html="$TMPDIR/pacman-index.html"
+        if curl -fsSL --connect-timeout 15 --max-time 60 "$repo/" -o "$html" 2>/dev/null; then
+            found=$(grep -Eo "$pattern" "$html" | sort -V | tail -1 || true)
+            rm -f "$html"
+            if [ -n "$found" ]; then
+                echo "$found"
+                return 0
+            fi
+        fi
+        rm -f "$html"
+    done
+
+    echo "$fallback"
+}
+
 # ─── Helper: install_pacman_pkg ───────────────
-# Downloads a .pkg.tar.xz from pacman repo and extracts into target dir
+# Downloads a .pkg.tar.xz from pacman repo and extracts into target dir.
+# Important: some mirrors return HTML with HTTP 200 during outages. We validate
+# with tar before accepting/caching the file.
 install_pacman_pkg() {
     local filename="$1"
     local target="$2"  # e.g., $PREFIX/glibc
@@ -155,27 +181,43 @@ install_pacman_pkg() {
     name=${filename%%-[0-9]*}
     local pkg_file="${PKG_DIR}/${filename}"
 
+    # If a previous run cached a bad HTML/error page, delete it.
     if [ -f "$pkg_file" ]; then
-        echo "    (cached) $name"
-    else
+        if tar -tJf "$pkg_file" >/dev/null 2>&1; then
+            echo "    (cached) $name"
+        else
+            echo "    removing broken cached $name package"
+            rm -f "$pkg_file"
+        fi
+    fi
+
+    if [ ! -f "$pkg_file" ]; then
         echo "    downloading $name..."
         local ok=0
-        local repo url
+        local repo url tmp_file
+        tmp_file="$pkg_file.tmp"
+
         for repo in "${PACMAN_PKG_REPOS[@]}"; do
             url="${repo}/${filename}"
             echo "      trying: $repo"
-            if curl -fL --connect-timeout 15 --retry 2 --retry-delay 2 --max-time 300 -o "$pkg_file.tmp" "$url"; then
-                mv "$pkg_file.tmp" "$pkg_file"
-                ok=1
-                break
+            rm -f "$tmp_file"
+
+            if curl -fL --connect-timeout 15 --retry 2 --retry-delay 2 --max-time 300 -o "$tmp_file" "$url"; then
+                if tar -tJf "$tmp_file" >/dev/null 2>&1; then
+                    mv "$tmp_file" "$pkg_file"
+                    ok=1
+                    break
+                else
+                    echo "      rejected invalid package from $repo"
+                    rm -f "$tmp_file"
+                fi
             fi
-            rm -f "$pkg_file.tmp"
+            rm -f "$tmp_file"
         done
 
         if [ "$ok" -ne 1 ]; then
-            echo -e "  ${RED}✗${NC} Failed to download $filename from all Termux-pacman mirrors"
-            echo "  Try checking the latest package name here:"
-            echo "  https://mirror.meowsmp.net/termux-pacman/gpkg/aarch64/"
+            echo -e "  ${RED}✗${NC} Failed to download a valid $filename from all Termux-pacman mirrors"
+            echo "  The package name may have changed, or mirrors may be temporarily broken."
             exit 1
         fi
     fi
@@ -183,7 +225,7 @@ install_pacman_pkg() {
     rm -rf "$EXTRACT_DIR"
     mkdir -p "$EXTRACT_DIR"
     tar -xJf "$pkg_file" -C "$EXTRACT_DIR" 2>/dev/null || {
-        echo -e "  ${RED}✗${NC} Failed to extract $pkg_file. It may be a broken partial download."
+        echo -e "  ${RED}✗${NC} Failed to extract $pkg_file."
         echo "  Delete it and rerun:"
         echo "  rm -f '$pkg_file'"
         exit 1
@@ -259,14 +301,17 @@ if [ -x "$GLIBC_LDSO" ]; then
 else
     mkdir -p "$PREFIX/glibc"
 
-    # Download glibc package directly from pacman repo (no pacman needed)
-    # The gpkg.db tells us: glibc-2.42-0-aarch64.pkg.tar.xz (~9.7MB)
-    echo "  Downloading glibc (~10MB)..."
-    install_pacman_pkg "glibc-2.42-0-aarch64.pkg.tar.xz" "$PREFIX/glibc"
+    # Download glibc package directly from pacman repo (no pacman needed).
+    # Auto-discover current filenames from mirror indexes; fall back to older known names.
+    GLIBC_PKG=$(discover_pacman_pkg_filename 'glibc-[0-9][^"<> ]*-aarch64\.pkg\.tar\.xz' 'glibc-2.42-0-aarch64.pkg.tar.xz')
+    GCC_LIBS_PKG=$(discover_pacman_pkg_filename 'gcc-libs-glibc-[0-9][^"<> ]*-aarch64\.pkg\.tar\.xz' 'gcc-libs-glibc-14.2.1-1-aarch64.pkg.tar.xz')
+
+    echo "  Downloading glibc: $GLIBC_PKG"
+    install_pacman_pkg "$GLIBC_PKG" "$PREFIX/glibc"
 
     # gcc-libs-glibc provides libstdc++.so.6 needed by Node.js (~24MB)
-    echo "  Downloading gcc-libs (~24MB)..."
-    install_pacman_pkg "gcc-libs-glibc-14.2.1-1-aarch64.pkg.tar.xz" "$PREFIX/glibc"
+    echo "  Downloading gcc-libs: $GCC_LIBS_PKG"
+    install_pacman_pkg "$GCC_LIBS_PKG" "$PREFIX/glibc"
 
     # Verify linker
     if [ ! -f "$GLIBC_LDSO" ]; then
